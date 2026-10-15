@@ -11,7 +11,15 @@ interface UserSettings {
   has_custom_brave_key: boolean;
   max_messages: number;
   custom_prompt: string | null;
+  agent_backend?: string;
+  available_agent_backends?: string[];
 }
+
+const AGENT_BACKEND_LABELS: Record<string, string> = {
+  provider: "AI provider (default)",
+  opencode: "OpenCode (self-hosted)",
+  hermes: "Hermes Agent (self-hosted)",
+};
 
 function SkeletonBlock({ className = "" }: { className?: string }) {
   return (
@@ -194,6 +202,7 @@ export default function Settings() {
   const [aiModel, setAiModel] = useState("");
   const [braveKey, setBraveKey] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
+  const [agentBackend, setAgentBackend] = useState("provider");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ valid: boolean; error?: string } | null>(null);
   const testAbortRef = useRef<AbortController | null>(null);
@@ -220,6 +229,7 @@ export default function Settings() {
         setAiBaseUrl(data.custom_ai_base_url || "");
         setAiModel(data.custom_ai_model || "");
         setCustomPrompt(data.custom_prompt || "");
+        setAgentBackend(data.agent_backend || "provider");
       } else if (res.status === 401) {
         await supabase.auth.signOut();
         navigate("/");
@@ -265,6 +275,7 @@ export default function Settings() {
       };
       if (aiApiKey) updates.custom_ai_api_key = aiApiKey;
       if (braveKey) updates.custom_brave_key = braveKey;
+      if ((settings?.available_agent_backends?.length ?? 0) > 1) updates.agent_backend = agentBackend;
 
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/settings`,
@@ -601,6 +612,31 @@ export default function Settings() {
         {/* Advanced tab */}
         {activeTab === "advanced" && (
           <div id="advanced-panel" role="tabpanel" aria-labelledby="advanced-tab" className="space-y-8">
+            {(settings?.available_agent_backends?.length ?? 0) > 1 && (
+              <fieldset className="rounded-2xl bg-gray-50 p-6 space-y-4">
+                <legend className="sr-only">Agent Backend</legend>
+                <div>
+                  <p className="text-sm font-semibold text-gray-800">Agent Backend</p>
+                  <p className="mt-1 text-xs text-gray-500 leading-relaxed">
+                    Run comments through a self-hosted agent harness instead of the AI provider.
+                    Each task keeps its own agent session. Comment &ldquo;{triggerWord || "@ai"} stop&rdquo; to cancel a run.
+                  </p>
+                </div>
+                <div>
+                  <label htmlFor="agent-backend" className="block text-sm text-gray-600">Backend</label>
+                  <select
+                    id="agent-backend"
+                    value={agentBackend}
+                    onChange={(e) => setAgentBackend(e.target.value)}
+                    className={inputClasses}
+                  >
+                    {settings!.available_agent_backends!.map((b) => (
+                      <option key={b} value={b}>{AGENT_BACKEND_LABELS[b] ?? b}</option>
+                    ))}
+                  </select>
+                </div>
+              </fieldset>
+            )}
             <fieldset className="rounded-2xl bg-gray-50 p-6 space-y-4">
               <legend className="sr-only">AI Provider Settings</legend>
               <div>
