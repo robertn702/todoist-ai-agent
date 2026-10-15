@@ -315,7 +315,6 @@ t("webhook harness: item events are routed to the runner too", async () => {
         event_name: "item:added",
         user_id: TODOIST_USER_ID,
         initiator: { id: TODOIST_USER_ID },
-    initiator: { id: TODOIST_USER_ID },
         event_data: { id: "task-1", content: "@ai Plan the week", description: "", labels: [] },
       });
       const submits = runnerCalls(calls);
