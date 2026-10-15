@@ -46,7 +46,7 @@ The Todoist OAuth token never leaves Supabase. The runner never sees it.
 | The runner accepts only "run a turn for this Todoist task" and "cancel this job". Callers cannot set commands, paths, URLs, models or permissions | Runner |
 | Approval and permission requests are **always denied**. A run that cannot be denied is stopped (`approval_required`) | Runner |
 | OpenCode sessions get the `[{"action":"*","resource":"*","effect":"deny"}]` ruleset by default. Unlike `ask`, a `deny` rule also overrides permissions the operator previously saved with "always" for that project | Runner |
-| Only events **initiated by the allowlisted account owner** run (Todoist delivers collaborator comments on shared projects to the owner's webhook; those are ignored) | Edge |
+| Only **comments** (`note:added` / `note:updated`) **initiated by the allowlisted account owner** run. Collaborator comments on shared projects are ignored, and task fields (title, description, labels via `item:added` / `item:updated`) never trigger a harness run, because they may contain collaborator-authored text even when the owner edits or duplicates the task. Provider mode is unchanged | Edge |
 | Job IDs double as harness idempotency keys (OpenCode message ID, Hermes `Idempotency-Key`) | Runner |
 
 A user who edits their own `users_config.agent_backend` directly through the
@@ -91,13 +91,13 @@ The runner is a small Deno service in `runner/`. It needs network access
 | `RUNNER_STATE_FILE` | no | Default `~/.local/state/todoist-harness-runner/state.json` (mode 0600) |
 | `RUNNER_JOB_TIMEOUT_SECONDS` | no | Per-turn wall-clock limit. Default `900` |
 | `RUNNER_POLL_INTERVAL_MS` | no | Harness polling interval. Default `2000` |
-| `OPENCODE_BASE_URL` | one backend | For example `http://127.0.0.1:4096` |
+| `OPENCODE_BASE_URL` | one backend | For example `http://127.0.0.1:4096`. Must be https unless it targets loopback |
 | `OPENCODE_SERVER_PASSWORD` | with OpenCode | Basic-auth password (`OPENCODE_SERVER_USERNAME` defaults to `opencode`) |
 | `OPENCODE_DIRECTORY` | no | Absolute project directory for new sessions |
 | `OPENCODE_AGENT` | no | Agent for new sessions (for example a restricted custom agent) |
 | `OPENCODE_MODEL` | no | `provider/model` for new sessions |
 | `OPENCODE_PERMISSIONS` | no | JSON ruleset for new sessions (last matching rule wins). Default: everything `deny`. Example of an explicit read-only opt-in: `[{"action":"*","resource":"*","effect":"deny"},{"action":"read","resource":"*","effect":"allow"}]`. Any `ask` rule is rejected by the runner, but beware that `ask` can be overridden by permissions saved with "always" in that OpenCode project — prefer `deny` |
-| `HERMES_BASE_URL` | one backend | For example `http://127.0.0.1:8642/p/todoist` |
+| `HERMES_BASE_URL` | one backend | For example `http://127.0.0.1:8642/p/todoist`. Must be https unless it targets loopback |
 | `HERMES_API_KEY` | with Hermes | That profile's `API_SERVER_KEY` |
 
 ```bash
@@ -141,8 +141,8 @@ selector appears only for allowlisted accounts.
 
 ## Using it
 
-- `@ai <request>` starts a turn. The first turn on a task includes the task title and description as context. Later turns send only the comment, because the harness session already has the history.
-- `@ai stop` (or `@ai cancel`) cancels the task's running turn. The progress comment then changes to "Agent run cancelled."
+- `@ai <request>` **in a comment** starts a turn. With a harness backend, `@ai` in a task title, description or label does nothing. The first turn on a task includes the task title and description as context. Later turns send only the comment, because the harness session already has the history.
+- `@ai stop` (or `@ai cancel`) cancels the task's running turn and any queued follow-ups. The progress comment then changes to "Agent run cancelled."
 - If the harness asked for approval during the run, the reply ends with a note that those requests were denied.
 - A timeout stops the run on the harness and reports an error comment.
 

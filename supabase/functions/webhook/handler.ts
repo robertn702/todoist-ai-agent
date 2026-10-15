@@ -375,23 +375,29 @@ async function stopHarnessForTask(
 ): Promise<void> {
   const todoist = new TodoistClient(user.todoist_token);
   const supabase = createServiceClient();
-  const { data: job } = await supabase
+  const { data: jobs, error } = await supabase
     .from("harness_jobs")
     .select("id")
     .eq("user_id", user.id)
     .eq("todoist_task_id", taskId)
     .eq("status", "submitted")
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .order("created_at", { ascending: true })
+    .limit(20);
+  if (error) throw new Error(`Failed to look up harness jobs: ${error.message}`);
 
-  if (!job) {
+  if (!jobs || jobs.length === 0) {
     await todoist.postComment(taskId, "No running agent job to stop on this task.");
     return;
   }
+  // Cancel every unfinished job on the task, oldest (the one actually running) first,
+  // so queued follow-ups do not start after the running one is stopped.
   const config = getHarnessEdgeConfig();
-  const cancelled = !!config && isHarnessAllowed(todoistUserId, config) &&
-    await cancelHarnessJob(config, job.id, todoistUserId);
+  let cancelled = false;
+  if (config && isHarnessAllowed(todoistUserId, config)) {
+    for (const job of jobs) {
+      if (await cancelHarnessJob(config, job.id, todoistUserId)) cancelled = true;
+    }
+  }
   if (!cancelled) {
     console.warn("Harness cancel was not accepted", { requestId, taskId });
     await todoist.postComment(taskId, "Could not stop the running agent job.");
@@ -434,7 +440,12 @@ async function runHarnessForTask(
   let progressCommentId: string | undefined;
   try {
     progressCommentId = await todoist.postProgressComment(taskId);
-    await supabase.from("harness_jobs").update({ progress_comment_id: progressCommentId }).eq("id", jobId);
+    const { error: linkErr } = await supabase
+      .from("harness_jobs")
+      .update({ progress_comment_id: progressCommentId })
+      .eq("id", jobId);
+    // Without the link the callback could not finalize this comment; do not start the run.
+    if (linkErr) throw new Error(`Failed to record progress comment: ${linkErr.message}`);
 
     // Fail closed: the backend must be configured and the Todoist user allowlisted.
     const config = getHarnessEdgeConfig();
@@ -477,10 +488,17 @@ async function processTask(
   user: UserConfig,
   todoistUserId: string,
   requestId: string,
-  trigger: { eventKey: string; text: string; initiatorId?: string },
+  trigger: { eventKey: string; text: string; initiatorId?: string; source: "note" | "item" },
   prefetchedComments?: TodoistComment[],
 ): Promise<void> {
   if (isHarnessBackend(user.agent_backend)) {
+    // Task text (title, description, labels) may have been written by a collaborator
+    // even when the owner is the one editing or duplicating the task, so only comments
+    // can trigger host-side harness runs. Provider mode still handles item events.
+    if (trigger.source !== "note") {
+      console.info("Ignoring task-field trigger for harness backend", { requestId, taskId });
+      return;
+    }
     // The webhook fires for the account owner even when a collaborator wrote the
     // comment. Only the allowlisted owner may drive host-side agent runs.
     if (!trigger.initiatorId || trigger.initiatorId !== todoistUserId) {
@@ -530,7 +548,7 @@ async function handleNoteEvent(
   );
   if (!triggerRegex.test(content)) return;
 
-  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event) });
+  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event), source: "note" });
 }
 
 async function handleItemEvent(
@@ -571,11 +589,11 @@ async function handleItemEvent(
     if (comments.some((c: TodoistComment) => (c.content ?? "").startsWith(AI_INDICATOR))) {
       return;
     }
-    await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event) }, comments);
+    await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event), source: "item" }, comments);
     return;
   }
 
-  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event) });
+  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event), source: "item" });
 }
 
 // ---------------------------------------------------------------------------
