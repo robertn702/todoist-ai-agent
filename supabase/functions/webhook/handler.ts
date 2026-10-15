@@ -477,10 +477,16 @@ async function processTask(
   user: UserConfig,
   todoistUserId: string,
   requestId: string,
-  trigger: { eventKey: string; text: string },
+  trigger: { eventKey: string; text: string; initiatorId?: string },
   prefetchedComments?: TodoistComment[],
 ): Promise<void> {
   if (isHarnessBackend(user.agent_backend)) {
+    // The webhook fires for the account owner even when a collaborator wrote the
+    // comment. Only the allowlisted owner may drive host-side agent runs.
+    if (!trigger.initiatorId || trigger.initiatorId !== todoistUserId) {
+      console.warn("Ignoring harness trigger not initiated by the account owner", { requestId, taskId });
+      return;
+    }
     await runHarnessForTask(taskId, user, todoistUserId, requestId, trigger.eventKey, trigger.text);
     return;
   }
@@ -490,6 +496,11 @@ async function processTask(
 // ---------------------------------------------------------------------------
 // Event handlers
 // ---------------------------------------------------------------------------
+
+function initiatorOf(event: TodoistWebhookEvent): string | undefined {
+  const id = event.initiator?.id;
+  return id === undefined || id === null || id === "" ? undefined : String(id);
+}
 
 async function handleNoteEvent(
   event: TodoistWebhookEvent,
@@ -519,7 +530,7 @@ async function handleNoteEvent(
   );
   if (!triggerRegex.test(content)) return;
 
-  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content });
+  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event) });
 }
 
 async function handleItemEvent(
@@ -560,11 +571,11 @@ async function handleItemEvent(
     if (comments.some((c: TodoistComment) => (c.content ?? "").startsWith(AI_INDICATOR))) {
       return;
     }
-    await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content }, comments);
+    await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event) }, comments);
     return;
   }
 
-  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content });
+  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content, initiatorId: initiatorOf(event) });
 }
 
 // ---------------------------------------------------------------------------
