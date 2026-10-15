@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-explicit-any -- harness responses are untrusted JSON, validated field by field
 // OpenCode adapter — drives an authenticated `opencode serve` (v2 HTTP API).
 //
 // Lifecycle used:

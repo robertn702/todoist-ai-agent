@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-explicit-any -- harness responses are untrusted JSON, validated field by field
 // In-process mock harness servers for the runner tests.
 //
 // Each mock is a `(req: Request) => Promise<Response>` handler that models the

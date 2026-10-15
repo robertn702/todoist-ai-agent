@@ -1,3 +1,4 @@
+// deno-lint-ignore-file no-explicit-any -- harness responses are untrusted JSON, validated field by field
 // Hermes adapter — drives the authenticated Hermes API server `/v1/runs` lifecycle.
 //
 // Lifecycle used:
