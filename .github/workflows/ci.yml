@@ -38,10 +38,13 @@ jobs:
       - uses: denoland/setup-deno@v2
 
       - name: Lint
-        run: deno lint supabase/functions/
+        run: deno lint supabase/functions/ runner/
 
       - name: Test (unit + integration)
         run: deno test supabase/functions/tests/ --no-check --allow-env --allow-read --ignore=supabase/functions/tests/e2e/
+
+      - name: Test harness runner
+        run: deno test runner/ --no-check --allow-env --allow-read --allow-write
 
   e2e-integration:
     runs-on: ubuntu-latest
