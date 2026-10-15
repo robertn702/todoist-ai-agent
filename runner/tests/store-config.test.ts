@@ -155,6 +155,8 @@ const invalid: Array<[string, Record<string, string | undefined>, string]> = [
   ["no backend", { OPENCODE_BASE_URL: undefined, OPENCODE_SERVER_PASSWORD: undefined }, "at least one backend"],
   ["missing callback url", { HARNESS_CALLBACK_URL: undefined }, "HARNESS_CALLBACK_URL"],
   ["http non-loopback callback", { HARNESS_CALLBACK_URL: "http://edge.example.com/cb" }, "must use https"],
+  ["http non-loopback opencode", { OPENCODE_BASE_URL: "http://10.0.0.5:4096" }, "OPENCODE_BASE_URL must use https"],
+  ["http non-loopback hermes", { HERMES_BASE_URL: "http://hermes.lan:8642", HERMES_API_KEY: "k" }, "HERMES_BASE_URL must use https"],
   ["callback with embedded credentials", { HARNESS_CALLBACK_URL: "https://u:p@edge.example.com/cb" }, "credentials"],
   ["callback not a url", { HARNESS_CALLBACK_URL: "not a url" }, "valid http(s) URL"],
   ["callback with ftp scheme", { HARNESS_CALLBACK_URL: "ftp://edge.example.com/cb" }, "valid http(s) URL"],

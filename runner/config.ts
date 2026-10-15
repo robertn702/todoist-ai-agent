@@ -102,7 +102,7 @@ export function loadRunnerConfig(env: (key: string) => string | undefined): Runn
       else model = { providerID: modelRaw.slice(0, slash), id: modelRaw.slice(slash + 1) };
     }
     opencode = {
-      baseUrl: parseUrl("OPENCODE_BASE_URL", opencodeUrl, errors, false),
+      baseUrl: parseUrl("OPENCODE_BASE_URL", opencodeUrl, errors, true),
       username: get("OPENCODE_SERVER_USERNAME") ?? "opencode",
       password: password ?? "",
       directory,
@@ -117,7 +117,7 @@ export function loadRunnerConfig(env: (key: string) => string | undefined): Runn
   if (hermesUrl) {
     const apiKey = get("HERMES_API_KEY");
     if (!apiKey) errors.push("HERMES_API_KEY is required when HERMES_BASE_URL is set");
-    hermes = { baseUrl: parseUrl("HERMES_BASE_URL", hermesUrl, errors, false), apiKey: apiKey ?? "" };
+    hermes = { baseUrl: parseUrl("HERMES_BASE_URL", hermesUrl, errors, true), apiKey: apiKey ?? "" };
   }
 
   if (!opencode && !hermes) errors.push("Configure at least one backend: OPENCODE_BASE_URL or HERMES_BASE_URL");
