@@ -20,6 +20,17 @@ import { captureException } from "../_shared/sentry.ts";
 import { uint8ToBase64, verifyHmac, decrypt, decryptIfPresent } from "../_shared/crypto.ts";
 import { sanitizeImageMediaType, sanitizeDocumentMediaType, isPrivateHostname, extractMarkdownImageUrls, guessMediaType, isTextFile } from "../_shared/validation.ts";
 import type { TodoistComment, TodoistWebhookEvent, UserConfig } from "../_shared/types.ts";
+import {
+  cancelHarnessJob,
+  getHarnessEdgeConfig,
+  harnessJobId,
+  HarnessSubmitError,
+  isHarnessAllowed,
+  isHarnessBackend,
+  isStopCommand,
+  submitHarnessJob,
+  type HarnessBackend,
+} from "../_shared/harness.ts";
 
 // ---------------------------------------------------------------------------
 // Shared AI processing
@@ -340,10 +351,152 @@ async function runAiForTask(
 }
 
 // ---------------------------------------------------------------------------
+// External harness processing (OpenCode / Hermes via the runner bridge)
+// ---------------------------------------------------------------------------
+
+class HarnessUnavailableError extends Error {}
+
+function harnessErrorForUser(error: unknown): string {
+  if (error instanceof HarnessUnavailableError) {
+    return "External agent backend is not enabled for this account. Switch back to the default AI provider in Settings.";
+  }
+  if (error instanceof HarnessSubmitError) {
+    if (error.code === "runner_unreachable") return "Could not reach the agent runner. Try again later.";
+    return "The agent runner rejected the request (backend disabled or account not authorized).";
+  }
+  return "Something went wrong while starting the agent run.";
+}
+
+async function stopHarnessForTask(
+  taskId: string,
+  user: UserConfig,
+  todoistUserId: string,
+  requestId: string,
+): Promise<void> {
+  const todoist = new TodoistClient(user.todoist_token);
+  const supabase = createServiceClient();
+  const { data: job } = await supabase
+    .from("harness_jobs")
+    .select("id")
+    .eq("user_id", user.id)
+    .eq("todoist_task_id", taskId)
+    .eq("status", "submitted")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!job) {
+    await todoist.postComment(taskId, "No running agent job to stop on this task.");
+    return;
+  }
+  const config = getHarnessEdgeConfig();
+  const cancelled = !!config && isHarnessAllowed(todoistUserId, config) &&
+    await cancelHarnessJob(config, job.id, todoistUserId);
+  if (!cancelled) {
+    console.warn("Harness cancel was not accepted", { requestId, taskId });
+    await todoist.postComment(taskId, "Could not stop the running agent job.");
+  }
+  // On success the runner reports `cancelled` via the callback, which finalizes the progress comment.
+}
+
+async function runHarnessForTask(
+  taskId: string,
+  user: UserConfig,
+  todoistUserId: string,
+  requestId: string,
+  eventKey: string,
+  prompt: string,
+): Promise<void> {
+  const backend = user.agent_backend as HarnessBackend;
+  const triggerWord = user.trigger_word || "@ai";
+
+  if (isStopCommand(prompt, triggerWord)) {
+    await stopHarnessForTask(taskId, user, todoistUserId, requestId);
+    return;
+  }
+
+  const todoist = new TodoistClient(user.todoist_token);
+  const supabase = createServiceClient();
+  const jobId = await harnessJobId(eventKey);
+
+  // Claim the job before any side effect: a duplicate delivery hits the primary key.
+  const { error: claimErr } = await supabase
+    .from("harness_jobs")
+    .insert({ id: jobId, user_id: user.id, todoist_task_id: taskId, backend });
+  if (claimErr) {
+    if (claimErr.code === "23505") {
+      console.info("Duplicate harness job ignored", { requestId, taskId });
+      return;
+    }
+    throw new Error(`Failed to record harness job: ${claimErr.message}`);
+  }
+
+  let progressCommentId: string | undefined;
+  try {
+    progressCommentId = await todoist.postProgressComment(taskId);
+    await supabase.from("harness_jobs").update({ progress_comment_id: progressCommentId }).eq("id", jobId);
+
+    // Fail closed: the backend must be configured and the Todoist user allowlisted.
+    const config = getHarnessEdgeConfig();
+    if (!config || !isHarnessAllowed(todoistUserId, config)) throw new HarnessUnavailableError();
+
+    const task = await todoist.getTask(taskId);
+    await submitHarnessJob(config, {
+      jobId,
+      backend,
+      todoistUserId,
+      taskId,
+      taskContent: task.content ?? "",
+      taskDescription: task.description ?? "",
+      prompt,
+    });
+  } catch (error) {
+    console.error("Harness submission failed", {
+      requestId,
+      taskId,
+      backend,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    await supabase.from("harness_jobs").update({ status: "failed" }).eq("id", jobId).eq("status", "submitted");
+    if (progressCommentId) {
+      try {
+        await todoist.updateComment(
+          progressCommentId,
+          `${ERROR_PREFIX} ${harnessErrorForUser(error)} Retry by adding a comment.`,
+        );
+      } catch (e) {
+        console.error("Failed to update progress comment with error", { requestId, error: e });
+      }
+    }
+    if (!(error instanceof HarnessUnavailableError)) await captureException(error);
+  }
+}
+
+async function processTask(
+  taskId: string,
+  user: UserConfig,
+  todoistUserId: string,
+  requestId: string,
+  trigger: { eventKey: string; text: string },
+  prefetchedComments?: TodoistComment[],
+): Promise<void> {
+  if (isHarnessBackend(user.agent_backend)) {
+    await runHarnessForTask(taskId, user, todoistUserId, requestId, trigger.eventKey, trigger.text);
+    return;
+  }
+  await runAiForTask(taskId, user, todoistUserId, requestId, prefetchedComments);
+}
+
+// ---------------------------------------------------------------------------
 // Event handlers
 // ---------------------------------------------------------------------------
 
-async function handleNoteEvent(event: TodoistWebhookEvent, user: UserConfig, requestId: string): Promise<void> {
+async function handleNoteEvent(
+  event: TodoistWebhookEvent,
+  user: UserConfig,
+  requestId: string,
+  eventKey: string,
+): Promise<void> {
   const { event_data } = event;
   const taskId = "item_id" in event_data ? event_data.item_id : undefined;
   const content: string = event_data.content ?? "";
@@ -366,10 +519,15 @@ async function handleNoteEvent(event: TodoistWebhookEvent, user: UserConfig, req
   );
   if (!triggerRegex.test(content)) return;
 
-  await runAiForTask(taskId, user, String(event.user_id), requestId);
+  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content });
 }
 
-async function handleItemEvent(event: TodoistWebhookEvent, user: UserConfig, requestId: string): Promise<void> {
+async function handleItemEvent(
+  event: TodoistWebhookEvent,
+  user: UserConfig,
+  requestId: string,
+  eventKey: string,
+): Promise<void> {
   const { event_data } = event;
   const taskId = "id" in event_data ? event_data.id : undefined;
   const content: string = event_data.content ?? "";
@@ -402,11 +560,11 @@ async function handleItemEvent(event: TodoistWebhookEvent, user: UserConfig, req
     if (comments.some((c: TodoistComment) => (c.content ?? "").startsWith(AI_INDICATOR))) {
       return;
     }
-    await runAiForTask(taskId, user, String(event.user_id), requestId, comments);
+    await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content }, comments);
     return;
   }
 
-  await runAiForTask(taskId, user, String(event.user_id), requestId);
+  await processTask(taskId, user, String(event.user_id), requestId, { eventKey, text: content });
 }
 
 // ---------------------------------------------------------------------------
@@ -488,7 +646,7 @@ export async function webhookHandler(req: Request): Promise<Response> {
   const supabase = createServiceClient();
   const { data: user, error: userErr } = await supabase
     .from("users_config")
-    .select("id, todoist_token, todoist_user_id, trigger_word, custom_ai_base_url, custom_ai_api_key, custom_ai_model, custom_brave_key, max_messages, custom_prompt")
+    .select("id, todoist_token, todoist_user_id, trigger_word, custom_ai_base_url, custom_ai_api_key, custom_ai_model, custom_brave_key, max_messages, custom_prompt, agent_backend")
     .eq("todoist_user_id", userId)
     .maybeSingle();
 
@@ -502,8 +660,10 @@ export async function webhookHandler(req: Request): Promise<Response> {
   // Idempotency check — prevent duplicate AI responses from concurrent deliveries (#159: before rate limit)
   // For note events, use comment ID (event_data.id); for item events, use task ID (#140)
   const entityId = String(event.event_data?.id ?? "");
+  const eventKey = entityId
+    ? `${userId}:${event.event_name}:${entityId}`
+    : `${userId}:${event.event_name}:request:${requestId}`;
   if (entityId) {
-    const eventKey = `${userId}:${event.event_name}:${entityId}`;
     const { data: claimed } = await supabase.rpc("try_claim_event", { p_event_id: eventKey });
     if (claimed === false) {
       return new Response(JSON.stringify({ ok: true, deduplicated: true }), {
@@ -534,9 +694,9 @@ export async function webhookHandler(req: Request): Promise<Response> {
   const processPromise = (async () => {
     try {
       if (event.event_name === "note:added" || event.event_name === "note:updated") {
-        await handleNoteEvent(event, decryptedUser, requestId);
+        await handleNoteEvent(event, decryptedUser, requestId, eventKey);
       } else if (event.event_name === "item:added" || event.event_name === "item:updated") {
-        await handleItemEvent(event, decryptedUser, requestId);
+        await handleItemEvent(event, decryptedUser, requestId, eventKey);
       }
     } catch (error) {
       console.error("Async webhook processing failed", {

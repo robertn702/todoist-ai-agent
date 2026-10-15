@@ -62,6 +62,8 @@ export interface UserConfig {
   custom_brave_key: string | null;
   max_messages: number | null;
   custom_prompt: string | null;
+  /** "provider" (default), "opencode" or "hermes". Null/undefined means provider. */
+  agent_backend?: string | null;
 }
 
 // ---------------------------------------------------------------------------

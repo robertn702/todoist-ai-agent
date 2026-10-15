@@ -405,3 +405,6 @@ verify_jwt = false
 
 [functions.stats]
 verify_jwt = false
+
+[functions.harness-callback]
+verify_jwt = false
