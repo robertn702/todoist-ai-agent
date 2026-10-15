@@ -411,11 +411,12 @@ t("harnessCallbackHandler: uses the user's Todoist token for the update", async 
   const { calls, restore } = mockFlow();
   const seen: string[] = [];
   const inner = globalThis.fetch;
-  globalThis.fetch = ((input: unknown, init?: RequestInit) => {
-    if (String(input).includes("api.todoist.com")) {
+  globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = input instanceof Request ? input.url : input instanceof URL ? input.href : String(input);
+    if (new URL(url).hostname === "api.todoist.com") {
       seen.push(new Headers(init?.headers).get("Authorization") ?? "");
     }
-    return inner(input as string, init);
+    return inner(input, init);
   }) as typeof fetch;
   try {
     await handler(await callbackRequest(validPayload()));
