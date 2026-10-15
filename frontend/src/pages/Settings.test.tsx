@@ -1203,4 +1203,29 @@ describe("Settings: agent backend", () => {
     });
     expect(JSON.parse(put[1]!.body as string).agent_backend).toBe("hermes");
   });
+
+  it("keeps the selector visible for a user who lost harness access so they can switch back", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({ ...mockSettings, agent_backend: "opencode", available_agent_backends: ["provider"] }),
+      headers: new Headers(),
+    } as Response);
+
+    renderSettings();
+    await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());
+    await switchToAdvanced(user);
+    const select = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(select.value).toBe("opencode");
+    await user.selectOptions(select, "provider");
+    await user.click(screen.getByText("Save Settings"));
+    const put = await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "PUT");
+      expect(call).toBeDefined();
+      return call!;
+    });
+    expect(JSON.parse(put[1]!.body as string).agent_backend).toBe("provider");
+  });
 });
