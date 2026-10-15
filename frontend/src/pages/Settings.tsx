@@ -203,6 +203,13 @@ export default function Settings() {
   const [braveKey, setBraveKey] = useState("");
   const [customPrompt, setCustomPrompt] = useState("");
   const [agentBackend, setAgentBackend] = useState("provider");
+  // Keep the current backend selectable so a user who lost harness access can switch back.
+  const backendOptions = Array.from(
+    new Set([
+      ...(settings?.available_agent_backends ?? ["provider"]),
+      ...(settings?.agent_backend ? [settings.agent_backend] : []),
+    ]),
+  );
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ valid: boolean; error?: string } | null>(null);
   const testAbortRef = useRef<AbortController | null>(null);
@@ -275,7 +282,7 @@ export default function Settings() {
       };
       if (aiApiKey) updates.custom_ai_api_key = aiApiKey;
       if (braveKey) updates.custom_brave_key = braveKey;
-      if ((settings?.available_agent_backends?.length ?? 0) > 1) updates.agent_backend = agentBackend;
+      if (backendOptions.length > 1) updates.agent_backend = agentBackend;
 
       const res = await fetch(
         `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/settings`,
@@ -612,7 +619,7 @@ export default function Settings() {
         {/* Advanced tab */}
         {activeTab === "advanced" && (
           <div id="advanced-panel" role="tabpanel" aria-labelledby="advanced-tab" className="space-y-8">
-            {(settings?.available_agent_backends?.length ?? 0) > 1 && (
+            {backendOptions.length > 1 && (
               <fieldset className="rounded-2xl bg-gray-50 p-6 space-y-4">
                 <legend className="sr-only">Agent Backend</legend>
                 <div>
@@ -630,7 +637,7 @@ export default function Settings() {
                     onChange={(e) => setAgentBackend(e.target.value)}
                     className={inputClasses}
                   >
-                    {settings!.available_agent_backends!.map((b) => (
+                    {backendOptions.map((b) => (
                       <option key={b} value={b}>{AGENT_BACKEND_LABELS[b] ?? b}</option>
                     ))}
                   </select>
