@@ -98,6 +98,18 @@ Deno.test("hermes: if denying fails, the run is stopped and fails approval_requi
   });
 });
 
+Deno.test("hermes: a deny that races an already-settled approval (409) is tolerated", async () => {
+  await withHarness({}, async (h) => {
+    h.hermes.mode = "approval";
+    h.hermes.approvalStatus = 409;
+    const result = await h.run(hermesReq(1));
+
+    assertEquals(result?.status, "completed");
+    assertEquals(h.hermes.approvals[0].choice, "deny");
+    assertEquals(h.hermes.stops.length, 0);
+  });
+});
+
 Deno.test("hermes: timeout stops the run and reports timed_out", async () => {
   await withHarness({ timeoutMs: 60 }, async (h) => {
     h.hermes.mode = "hang";

@@ -129,6 +129,9 @@ export class HermesAdapter implements HarnessAdapter {
         ...(approval.id ? { request_id: approval.id } : {}),
         ...(approval.generation !== undefined ? { execution_generation: approval.generation } : {}),
       },
+      {},
+      // 409: the approval was already settled (answered elsewhere or timed out); re-poll.
+      [409],
     );
   }
 

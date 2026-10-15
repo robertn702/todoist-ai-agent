@@ -31,9 +31,12 @@ export interface OpenCodePermissionRule {
   effect: "allow" | "deny" | "ask";
 }
 
-/** Fail-closed default: every tool call asks, and the runner rejects every ask. */
+/**
+ * Fail-closed default: every tool call is denied outright. `deny` (unlike `ask`)
+ * also wins over permissions the operator previously saved with "always".
+ */
 export const OPENCODE_DEFAULT_PERMISSIONS: OpenCodePermissionRule[] = [
-  { action: "*", resource: "*", effect: "ask" },
+  { action: "*", resource: "*", effect: "deny" },
 ];
 
 export interface OpenCodeConfig {
