@@ -44,6 +44,8 @@ export interface TodoistItemEventData {
 export interface TodoistWebhookEvent {
   event_name: string;
   user_id: number | string;
+  /** The user who caused the event (may be a collaborator on a shared project). */
+  initiator?: { id?: number | string | null };
   event_data: TodoistNoteEventData | TodoistItemEventData;
 }
 

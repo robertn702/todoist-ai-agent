@@ -49,6 +49,7 @@ function makePayload(content = "@ai Do X", overrides: Record<string, unknown> = 
   return {
     event_name: "note:added",
     user_id: TODOIST_USER_ID,
+    initiator: { id: TODOIST_USER_ID },
     event_data: { id: "comment-1", content, item_id: "task-1" },
     ...overrides,
   };
@@ -313,6 +314,8 @@ t("webhook harness: item events are routed to the runner too", async () => {
       await deliver({
         event_name: "item:added",
         user_id: TODOIST_USER_ID,
+        initiator: { id: TODOIST_USER_ID },
+    initiator: { id: TODOIST_USER_ID },
         event_data: { id: "task-1", content: "@ai Plan the week", description: "", labels: [] },
       });
       const submits = runnerCalls(calls);
@@ -620,6 +623,34 @@ for (const backend of ["provider", null] as const) {
           if (v === undefined) Deno.env.delete(k);
           else Deno.env.set(k, v);
         }
+      }
+    });
+  });
+}
+
+// ============================================================================
+// Collaborator-initiated events (shared projects)
+// ============================================================================
+
+for (const [name, initiator] of [
+  ["a collaborator", { id: "99999" }],
+  ["an unknown initiator", undefined],
+] as const) {
+  t(`webhook harness: events initiated by ${name} never reach the runner`, async () => {
+    await withHarnessEnv(HARNESS_ENV, async () => {
+      const { calls, restore } = mockFlow();
+      try {
+        const payload = makePayload("@ai run something");
+        if (initiator) payload.initiator = initiator;
+        else delete payload.initiator;
+        const res = await deliver(payload);
+        assertEquals(res.status, 200);
+        assertEquals(runnerCalls(calls).length, 0);
+        assertEquals(calls.filter(isJobInsert).length, 0);
+        assertEquals(calls.filter(isProgressCreate).length, 0);
+        assertEquals(calls.filter(isAiProviderCall).length, 0);
+      } finally {
+        restore();
       }
     });
   });
