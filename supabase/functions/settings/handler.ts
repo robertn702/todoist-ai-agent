@@ -3,6 +3,7 @@ import { validateSettings, isPrivateHostname } from "../_shared/validation.ts";
 import { encryptIfPresent } from "../_shared/crypto.ts";
 import { isAnthropicUrl } from "../_shared/ai.ts";
 import { captureException } from "../_shared/sentry.ts";
+import { AGENT_BACKENDS, isHarnessAllowed, isHarnessBackend } from "../_shared/harness.ts";
 import {
   getSettingsRateLimitConfig,
   checkRateLimitByUuid,
@@ -77,7 +78,7 @@ export async function settingsHandler(req: Request): Promise<Response> {
     // Fetch non-sensitive fields via user client (respects RLS)
     const { data, error } = await supabase
       .from("users_config")
-      .select("trigger_word, custom_ai_base_url, custom_ai_model, max_messages, custom_prompt")
+      .select("trigger_word, custom_ai_base_url, custom_ai_model, max_messages, custom_prompt, agent_backend")
       .eq("id", user.id)
       .single();
 
@@ -88,7 +89,7 @@ export async function settingsHandler(req: Request): Promise<Response> {
     // Check key presence via service client (bypasses RLS, can see encrypted cols)
     const { data: fullConfig } = await serviceClient
       .from("users_config")
-      .select("custom_ai_api_key, custom_brave_key")
+      .select("custom_ai_api_key, custom_brave_key, todoist_user_id")
       .eq("id", user.id)
       .single();
 
@@ -100,6 +101,10 @@ export async function settingsHandler(req: Request): Promise<Response> {
       has_custom_brave_key: !!fullConfig?.custom_brave_key,
       max_messages: data.max_messages,
       custom_prompt: data.custom_prompt,
+      agent_backend: data.agent_backend ?? "provider",
+      available_agent_backends: fullConfig?.todoist_user_id && isHarnessAllowed(String(fullConfig.todoist_user_id))
+        ? AGENT_BACKENDS
+        : ["provider"],
     }, 200, {
       ...CORS_HEADERS,
       "Cache-Control": "no-store, no-cache, must-revalidate",
@@ -218,13 +223,14 @@ export async function settingsHandler(req: Request): Promise<Response> {
       "custom_brave_key",
       "max_messages",
       "custom_prompt",
+      "agent_backend",
     ];
 
     const updates: Record<string, unknown> = {};
     for (const field of allowedFields) {
       if (body[field] !== undefined) {
         // Set empty strings to null for optional text fields
-        if (field !== "trigger_word" && field !== "max_messages") {
+        if (field !== "trigger_word" && field !== "max_messages" && field !== "agent_backend") {
           updates[field] = body[field] || null;
         } else {
           updates[field] = body[field];
@@ -245,6 +251,21 @@ export async function settingsHandler(req: Request): Promise<Response> {
     const validationErrors = validateSettings(updates);
     if (validationErrors.length > 0) {
       return jsonResponse({ error: "Validation failed", details: validationErrors }, 400, CORS_HEADERS);
+    }
+
+    // External harness backends run on operator-hosted infrastructure: allowlisted users only.
+    if (isHarnessBackend(updates.agent_backend)) {
+      const { data: owner } = await serviceClient
+        .from("users_config")
+        .select("todoist_user_id")
+        .eq("id", user.id)
+        .single();
+      if (!owner?.todoist_user_id || !isHarnessAllowed(String(owner.todoist_user_id))) {
+        return jsonResponse({
+          error: "Validation failed",
+          details: [{ field: "agent_backend", message: "External agent backends are not enabled for this account" }],
+        }, 403, CORS_HEADERS);
+      }
     }
 
     // Encrypt sensitive fields before writing
