@@ -707,3 +707,213 @@ t("settingsHandler: DELETE returns 500 on deletion failure", async () => {
     restore();
   }
 });
+
+// ============================================================================
+// Agent backend (external harness)
+// ============================================================================
+
+const HARNESS_ENV_KEYS = ["HARNESS_RUNNER_URL", "HARNESS_RUNNER_SECRET", "HARNESS_ALLOWED_TODOIST_USER_IDS"];
+const HARNESS_ENV_ON: Record<string, string> = {
+  HARNESS_RUNNER_URL: "https://runner.example.com",
+  HARNESS_RUNNER_SECRET: "runner-secret-0123456789-0123456789-abcdef",
+  HARNESS_ALLOWED_TODOIST_USER_IDS: "12345,777",
+};
+
+/** Run fn with the given harness env (omitted keys are deleted), restoring previous values afterwards. */
+async function withHarnessEnv(vars: Record<string, string>, fn: () => Promise<void>): Promise<void> {
+  const previous = HARNESS_ENV_KEYS.map((k) => [k, Deno.env.get(k)] as const);
+  for (const k of HARNESS_ENV_KEYS) {
+    if (k in vars) Deno.env.set(k, vars[k]);
+    else Deno.env.delete(k);
+  }
+  try {
+    await fn();
+  } finally {
+    for (const [k, v] of previous) {
+      if (v === undefined) Deno.env.delete(k);
+      else Deno.env.set(k, v);
+    }
+  }
+}
+
+/** users_config mock: user-client select returns the settings row, service-client selects return the owner row. */
+function agentBackendMock(
+  agentBackend: string | null,
+  todoistUserId: string | null,
+  onPatch?: (body: Record<string, unknown>) => void,
+) {
+  return authedMock((url, init) => {
+    if (!url.includes("/rest/v1/users_config")) return null;
+    if (init?.method === "PATCH") {
+      onPatch?.(JSON.parse(init.body as string));
+      return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    if (url.includes("custom_ai_api_key")) {
+      return new Response(
+        JSON.stringify({ custom_ai_api_key: null, custom_brave_key: null, todoist_user_id: todoistUserId }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        trigger_word: "@ai",
+        custom_ai_base_url: null,
+        custom_ai_model: null,
+        max_messages: 20,
+        custom_prompt: null,
+        agent_backend: agentBackend,
+        todoist_user_id: todoistUserId,
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } },
+    );
+  });
+}
+
+function getSettings(): Request {
+  return new Request("http://localhost/settings", { method: "GET", headers: { Authorization: "Bearer valid-jwt" } });
+}
+
+function putSettings(body: Record<string, unknown>): Request {
+  return new Request("http://localhost/settings", {
+    method: "PUT",
+    headers: { Authorization: "Bearer valid-jwt", "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+t("settingsHandler: GET defaults agent_backend to provider and only offers provider when not allowlisted", async () => {
+  await withHarnessEnv({ ...HARNESS_ENV_ON, HARNESS_ALLOWED_TODOIST_USER_IDS: "777" }, async () => {
+    const restore = mockFetch(agentBackendMock(null, "12345"));
+    try {
+      const res = await handler(getSettings());
+      assertEquals(res.status, 200);
+      const body = await res.json();
+      assertEquals(body.agent_backend, "provider");
+      assertEquals(body.available_agent_backends, ["provider"]);
+    } finally {
+      restore();
+    }
+  });
+});
+
+t("settingsHandler: GET offers all backends for an allowlisted user when the runner is configured", async () => {
+  await withHarnessEnv(HARNESS_ENV_ON, async () => {
+    const restore = mockFetch(agentBackendMock("opencode", "12345"));
+    try {
+      const res = await handler(getSettings());
+      assertEquals(res.status, 200);
+      const body = await res.json();
+      assertEquals(body.agent_backend, "opencode");
+      assertEquals(body.available_agent_backends, ["provider", "opencode", "hermes"]);
+    } finally {
+      restore();
+    }
+  });
+});
+
+t("settingsHandler: GET only offers provider when the runner env is missing", async () => {
+  await withHarnessEnv({}, async () => {
+    const restore = mockFetch(agentBackendMock("provider", "12345"));
+    try {
+      const res = await handler(getSettings());
+      assertEquals(res.status, 200);
+      const body = await res.json();
+      assertEquals(body.agent_backend, "provider");
+      assertEquals(body.available_agent_backends, ["provider"]);
+    } finally {
+      restore();
+    }
+  });
+});
+
+t("settingsHandler: PUT agent_backend opencode succeeds for an allowlisted user", async () => {
+  await withHarnessEnv(HARNESS_ENV_ON, async () => {
+    let updated: Record<string, unknown> | null = null;
+    const restore = mockFetch(agentBackendMock("provider", "12345", (b) => { updated = b; }));
+    try {
+      const res = await handler(putSettings({ agent_backend: "opencode" }));
+      assertEquals(res.status, 200);
+      assertEquals((await res.json()).ok, true);
+      assertEquals(updated, { agent_backend: "opencode" });
+    } finally {
+      restore();
+    }
+  });
+});
+
+t("settingsHandler: PUT agent_backend hermes succeeds for an allowlisted user", async () => {
+  await withHarnessEnv(HARNESS_ENV_ON, async () => {
+    let updated: Record<string, unknown> | null = null;
+    const restore = mockFetch(agentBackendMock("provider", "12345", (b) => { updated = b; }));
+    try {
+      const res = await handler(putSettings({ agent_backend: "hermes" }));
+      assertEquals(res.status, 200);
+      assertEquals(updated, { agent_backend: "hermes" });
+    } finally {
+      restore();
+    }
+  });
+});
+
+t("settingsHandler: PUT agent_backend opencode returns 403 for a non-allowlisted user", async () => {
+  await withHarnessEnv({ ...HARNESS_ENV_ON, HARNESS_ALLOWED_TODOIST_USER_IDS: "777" }, async () => {
+    let patched = false;
+    const restore = mockFetch(agentBackendMock("provider", "12345", () => { patched = true; }));
+    try {
+      const res = await handler(putSettings({ agent_backend: "opencode" }));
+      assertEquals(res.status, 403);
+      const body = await res.json();
+      assertEquals(body.error, "Validation failed");
+      assertEquals(body.details[0].field, "agent_backend");
+      assertEquals(patched, false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+t("settingsHandler: PUT agent_backend hermes returns 403 when the runner env is missing", async () => {
+  await withHarnessEnv({}, async () => {
+    let patched = false;
+    const restore = mockFetch(agentBackendMock("provider", "12345", () => { patched = true; }));
+    try {
+      const res = await handler(putSettings({ agent_backend: "hermes" }));
+      assertEquals(res.status, 403);
+      assertEquals(patched, false);
+    } finally {
+      restore();
+    }
+  });
+});
+
+t("settingsHandler: PUT agent_backend rejects invalid values with 400", async () => {
+  await withHarnessEnv(HARNESS_ENV_ON, async () => {
+    for (const value of ["shell", "", "OpenCode", 1, null]) {
+      let patched = false;
+      const restore = mockFetch(agentBackendMock("provider", "12345", () => { patched = true; }));
+      try {
+        const res = await handler(putSettings({ agent_backend: value }));
+        assertEquals(res.status, 400, `agent_backend ${JSON.stringify(value)}`);
+        const body = await res.json();
+        assertEquals(body.error, "Validation failed");
+        assertEquals(patched, false);
+      } finally {
+        restore();
+      }
+    }
+  });
+});
+
+t("settingsHandler: PUT agent_backend provider is always allowed", async () => {
+  await withHarnessEnv({}, async () => {
+    let updated: Record<string, unknown> | null = null;
+    const restore = mockFetch(agentBackendMock("opencode", "12345", (b) => { updated = b; }));
+    try {
+      const res = await handler(putSettings({ agent_backend: "provider" }));
+      assertEquals(res.status, 200);
+      assertEquals(updated, { agent_backend: "provider" });
+    } finally {
+      restore();
+    }
+  });
+});
