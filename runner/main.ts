@@ -26,8 +26,6 @@ const jobs = new JobManager({
   timeoutMs: config.jobTimeoutMs,
   pollIntervalMs: config.pollIntervalMs,
 });
-await jobs.recover();
-
 const handler = createRunnerHandler({
   secret: config.secret,
   allowedTodoistUserIds: config.allowedTodoistUserIds,
@@ -42,3 +40,6 @@ console.info("harness runner starting", {
 });
 
 Deno.serve({ hostname: config.host, port: config.port }, handler);
+
+// Recover after listening so slow callback redelivery never blocks new jobs.
+jobs.recover().catch((e) => console.error("startup recovery failed", { error: String(e) }));

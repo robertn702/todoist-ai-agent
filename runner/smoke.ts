@@ -10,7 +10,7 @@
 //   HERMES_BASE_URL=http://127.0.0.1:8642/p/todoist HERMES_API_KEY=... \
 //     deno run --allow-net=127.0.0.1 --allow-env runner/smoke.ts hermes
 //
-// Optional: SMOKE_TIMEOUT_SECONDS (default 300), SMOKE_SKIP_TOOL_CHECK=1,
+// Optional: SMOKE_TIMEOUT_SECONDS (default 300), SMOKE_SKIP_TOOL_CHECK=1 (skip the tool-blocking check),
 // SMOKE_SKIP_CANCEL=1, plus the runner's OPENCODE_* settings (directory,
 // agent, model, permissions). See docs/external-harness.md.
 
@@ -153,12 +153,14 @@ try {
   if (Deno.env.get("SMOKE_SKIP_TOOL_CHECK") !== "1") {
     const t4 = await turn(
       taskB,
-      "Use your shell/terminal tool to run the command `echo todoist-smoke` and tell me its output. If the tool is denied, say DENIED.",
+      "Use your shell/terminal tool to run `cat /proc/sys/kernel/random/uuid` and reply with its exact output. If the tool is unavailable or denied, reply DENIED.",
     );
+    // A UUID in the reply means the command actually ran on the host.
+    const ranTool = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i.test(t4.result.output ?? "");
     check(
-      "tool permission request denied (fail closed)",
-      t4.result.denied_approvals > 0 || t4.result.error_code === "approval_required",
-      `status=${t4.result.status} denied=${t4.result.denied_approvals}`,
+      "tool execution blocked (fail closed)",
+      !ranTool,
+      `status=${t4.result.status} denied_approvals=${t4.result.denied_approvals}`,
     );
   }
 

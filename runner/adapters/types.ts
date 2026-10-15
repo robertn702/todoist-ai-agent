@@ -67,7 +67,10 @@ export async function stableId(prefix: string, ...parts: string[]): Promise<stri
   return `${prefix}${hex.slice(0, 26)}`;
 }
 
-/** fetch with a per-request timeout; never follows redirects. */
+/**
+ * fetch with a per-request timeout that also covers reading the body (a harness
+ * that sends headers and then stalls cannot hang a job); never follows redirects.
+ */
 export async function harnessFetch(
   url: string,
   init: RequestInit,
@@ -76,7 +79,10 @@ export async function harnessFetch(
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
-    return await fetch(url, { ...init, redirect: "manual", signal: controller.signal });
+    const res = await fetch(url, { ...init, redirect: "manual", signal: controller.signal });
+    const text = await res.text();
+    const nullBody = res.status === 204 || res.status === 205 || res.status === 304;
+    return new Response(nullBody ? null : text, { status: res.status, headers: res.headers });
   } finally {
     clearTimeout(timer);
   }

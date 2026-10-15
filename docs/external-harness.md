@@ -45,7 +45,8 @@ The Todoist OAuth token never leaves Supabase. The runner never sees it.
 | Settings refuse non-provider backends for accounts that are not allowlisted | Settings API |
 | The runner accepts only "run a turn for this Todoist task" and "cancel this job". Callers cannot set commands, paths, URLs, models or permissions | Runner |
 | Approval and permission requests are **always denied**. A run that cannot be denied is stopped (`approval_required`) | Runner |
-| OpenCode sessions get the `[{"action":"*","resource":"*","effect":"ask"}]` ruleset by default, so every tool call asks and is then rejected | Runner |
+| OpenCode sessions get the `[{"action":"*","resource":"*","effect":"deny"}]` ruleset by default. Unlike `ask`, a `deny` rule also overrides permissions the operator previously saved with "always" for that project | Runner |
+| Only events **initiated by the allowlisted account owner** run (Todoist delivers collaborator comments on shared projects to the owner's webhook; those are ignored) | Edge |
 | Job IDs double as harness idempotency keys (OpenCode message ID, Hermes `Idempotency-Key`) | Runner |
 
 A user who edits their own `users_config.agent_backend` directly through the
@@ -95,7 +96,7 @@ The runner is a small Deno service in `runner/`. It needs network access
 | `OPENCODE_DIRECTORY` | no | Absolute project directory for new sessions |
 | `OPENCODE_AGENT` | no | Agent for new sessions (for example a restricted custom agent) |
 | `OPENCODE_MODEL` | no | `provider/model` for new sessions |
-| `OPENCODE_PERMISSIONS` | no | JSON ruleset for new sessions. Default: everything `ask`, which the runner rejects. Example of an explicit read-only opt-in: `[{"action":"*","resource":"*","effect":"ask"},{"action":"read","resource":"*","effect":"allow"}]` |
+| `OPENCODE_PERMISSIONS` | no | JSON ruleset for new sessions (last matching rule wins). Default: everything `deny`. Example of an explicit read-only opt-in: `[{"action":"*","resource":"*","effect":"deny"},{"action":"read","resource":"*","effect":"allow"}]`. Any `ask` rule is rejected by the runner, but beware that `ask` can be overridden by permissions saved with "always" in that OpenCode project — prefer `deny` |
 | `HERMES_BASE_URL` | one backend | For example `http://127.0.0.1:8642/p/todoist` |
 | `HERMES_API_KEY` | with Hermes | That profile's `API_SERVER_KEY` |
 
@@ -155,7 +156,7 @@ receiver on ephemeral loopback ports against your local harness. It checks:
 - same-task continuity (a codeword is recalled)
 - cross-task separation
 - duplicate-job deduplication
-- denial of tool permissions
+- tool execution is blocked (the agent is asked to print a fresh UUID from the host; a UUID in the reply fails the check)
 - cancellation
 
 It generates a throwaway signing secret and never prints credentials.
@@ -174,7 +175,7 @@ HERMES_BASE_URL=http://127.0.0.1:8642/p/todoist HERMES_API_KEY="$(<your secret l
 Options:
 
 - `SMOKE_TIMEOUT_SECONDS`: default 300.
-- `SMOKE_SKIP_TOOL_CHECK=1`: use this if your Hermes profile never asks for approval. The tool-denial check expects a permission or approval request.
+- `SMOKE_SKIP_TOOL_CHECK=1`: skip the tool-blocking check (for example, if you deliberately allow shell tools).
 - `SMOKE_SKIP_CANCEL=1`: skip the cancellation check.
 
 For an end-to-end Todoist check after deploying:

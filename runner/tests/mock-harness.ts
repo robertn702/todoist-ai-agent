@@ -494,6 +494,11 @@ export class MockHermes {
       status: run.status === "waiting_for_approval" ? this.approvalStatus : 409,
     });
     if (run.status !== "waiting_for_approval") return json({ error: { code: "no_pending_approval" } }, 409);
+    if (this.approvalStatus === 409) {
+      // Simulate the approval having been settled elsewhere (e.g. timed out → blocked) just before our deny.
+      this.complete(run);
+      return json({ error: { code: "approval_not_pending" } }, 409);
+    }
     if (this.approvalStatus !== 200) return json({ error: { code: "boom" } }, this.approvalStatus);
     this.complete(run);
     return json({ run_id: run.run_id, status: "running" });

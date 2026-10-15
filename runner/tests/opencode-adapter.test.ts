@@ -14,7 +14,7 @@ Deno.test("opencode: first job creates a session with default permissions and de
     assertEquals(result, { status: "completed", output: "reply 1", denied_approvals: 0 });
     assertEquals(h.opencode.sessions.size, 1);
     const [session] = [...h.opencode.sessions.values()];
-    assertEquals(session.createBody.permissions, [{ action: "*", resource: "*", effect: "ask" }]);
+    assertEquals(session.createBody.permissions, [{ action: "*", resource: "*", effect: "deny" }]);
     assertEquals(session.createBody.permissions, OPENCODE_DEFAULT_PERMISSIONS);
     assertEquals(session.createBody.title, "Todoist: Buy milk");
 
