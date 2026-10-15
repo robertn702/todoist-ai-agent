@@ -66,7 +66,7 @@ export async function harnessCallbackHandler(req: Request): Promise<Response> {
   if (rawBody.length > MAX_CALLBACK_BYTES) return json({ error: "Payload too large" }, 413);
 
   const verified = await verifyHarnessRequest({
-    secret: Deno.env.get("HARNESS_RUNNER_SECRET"),
+    secret: Deno.env.get("HARNESS_RUNNER_SECRET")?.trim(),
     direction: "runner-to-edge",
     route: CALLBACK_ROUTE,
     body: rawBody,
@@ -110,41 +110,44 @@ export async function harnessCallbackHandler(req: Request): Promise<Response> {
     return json({ error: "Invalid payload" }, 400);
   }
 
-  const { data: job } = await supabase
+  const { data: job, error: jobErr } = await supabase
     .from("harness_jobs")
     .select("id, user_id, todoist_task_id, progress_comment_id, status")
     .eq("id", jobId)
     .maybeSingle();
+  if (jobErr) return json({ error: "Temporarily unavailable" }, 503);
   if (!job) return json({ error: "Unknown job" }, 404);
 
-  const { data: user } = await supabase
+  const { data: user, error: userErr } = await supabase
     .from("users_config")
     .select("id, todoist_token, todoist_user_id")
     .eq("id", job.user_id)
     .maybeSingle();
+  if (userErr) return json({ error: "Temporarily unavailable" }, 503);
   // The job must belong to the Todoist user the runner says it ran for.
   if (!user || String(user.todoist_user_id) !== todoistUserId) return json({ error: "Unknown job" }, 404);
+  if (job.status !== "submitted") return json({ ok: true, duplicate: true });
 
-  // Atomically transition submitted → terminal; a repeat callback finds nothing to update.
-  const { data: claimed, error: claimErr } = await supabase
-    .from("harness_jobs")
-    .update({ status })
-    .eq("id", jobId)
-    .eq("status", "submitted")
-    .select("id");
-  if (claimErr) return json({ error: "Temporarily unavailable" }, 503);
-  if (!claimed || claimed.length === 0) return json({ ok: true, duplicate: true });
+  const claim = () =>
+    supabase.from("harness_jobs").update({ status }).eq("id", jobId).eq("status", "submitted").select("id");
 
+  let claimed: unknown[] | null = null;
   try {
     const todoist = new TodoistClient(await decrypt(user.todoist_token));
     const text = formatHarnessResult(status, output, errorCode, denied);
     if (job.progress_comment_id) {
+      // Editing the progress comment is idempotent, so do it before committing the
+      // terminal status: a failure leaves the job `submitted` for the runner's retry.
       await todoist.updateComment(job.progress_comment_id, text);
+      const { data, error } = await claim();
+      if (error) return json({ error: "Temporarily unavailable" }, 503);
+      claimed = data;
     } else {
-      await todoist.postComment(job.todoist_task_id, text);
-    }
-    if (status === "completed") {
-      await supabase.rpc("increment_ai_requests", { p_todoist_user_id: todoistUserId });
+      // Posting a new comment is not idempotent: claim first so it happens once.
+      const { data, error } = await claim();
+      if (error) return json({ error: "Temporarily unavailable" }, 503);
+      claimed = data;
+      if (claimed && claimed.length > 0) await todoist.postComment(job.todoist_task_id, text);
     }
   } catch (error) {
     console.error("Failed to finalize harness job", {
@@ -152,9 +155,12 @@ export async function harnessCallbackHandler(req: Request): Promise<Response> {
       error: error instanceof Error ? error.message : String(error),
     });
     await captureException(error);
-    // Re-open the job so the runner's retry can finalize it.
-    await supabase.from("harness_jobs").update({ status: "submitted" }).eq("id", jobId).eq("status", status);
     return json({ error: "Failed to update Todoist" }, 502);
+  }
+
+  if (!claimed || claimed.length === 0) return json({ ok: true, duplicate: true });
+  if (status === "completed") {
+    await supabase.rpc("increment_ai_requests", { p_todoist_user_id: todoistUserId });
   }
 
   return json({ ok: true });

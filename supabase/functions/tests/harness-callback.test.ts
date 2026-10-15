@@ -437,13 +437,22 @@ t("harnessCallbackHandler: completed without a progress comment posts a new comm
   assert(sent.content.includes("All done."));
 });
 
-t("harnessCallbackHandler: duplicate callback returns duplicate:true without touching Todoist", async () => {
-  const { res, body, calls } = await post(validPayload(), { claimResult: [] });
+t("harnessCallbackHandler: callback for an already-finalized job is a no-op duplicate", async () => {
+  const { res, body, calls } = await post(validPayload(), { job: { ...defaultJob(), status: "completed" } });
   assertEquals(res.status, 200);
   assertEquals(body, { ok: true, duplicate: true });
   assertEquals(calls.filter(isTodoist).length, 0);
   assertEquals(calls.filter(isIncrement).length, 0);
-  assertEquals(calls.filter(isJobPatch).length, 1);
+  assertEquals(calls.filter(isJobPatch).length, 0);
+});
+
+t("harnessCallbackHandler: losing the claim race (concurrent retry) does not double-count usage", async () => {
+  const { res, body, calls } = await post(validPayload(), { claimResult: [] });
+  assertEquals(res.status, 200);
+  assertEquals(body, { ok: true, duplicate: true });
+  // The idempotent comment edit happens, but usage is only counted by the claim winner.
+  assertEquals(calls.filter(isTodoist).length, 1);
+  assertEquals(calls.filter(isIncrement).length, 0);
 });
 
 t("harnessCallbackHandler: failed with approval_required mentions approval and does not count usage", async () => {
@@ -491,18 +500,40 @@ t("harnessCallbackHandler: ignores invalid denied_approvals values", async () =>
   }
 });
 
-t("harnessCallbackHandler: Todoist update failure returns 502 and re-opens the job", async () => {
+t("harnessCallbackHandler: Todoist update failure returns 502 and leaves the job submitted for retry", async () => {
   const { res, body, calls } = await post(validPayload(), { todoistStatus: 500 });
   assertEquals(res.status, 502);
   assertEquals(body.error, "Failed to update Todoist");
-
-  const patches = calls.filter(isJobPatch);
-  assertEquals(patches.length, 2);
-  assertEquals(JSON.parse(patches[0].body), { status: "completed" });
-  assertEquals(JSON.parse(patches[1].body), { status: "submitted" });
-  assert(patches[1].url.includes("status=eq.completed"), patches[1].url);
-  assert(patches[1].url.includes(`id=eq.${JOB_ID}`), patches[1].url);
+  // Status is only committed after the comment is updated, so nothing to undo.
+  assertEquals(calls.filter(isJobPatch).length, 0);
   assertEquals(calls.filter(isIncrement).length, 0);
+});
+
+t("harnessCallbackHandler: database lookup errors are retryable (503), not permanent 404s", async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = ((input: unknown) => {
+    const url = String(input);
+    if (url.includes("/rest/v1/rpc/try_claim_event")) {
+      return Promise.resolve(new Response("true", { status: 200, headers: JSON_HEADERS }));
+    }
+    return Promise.resolve(new Response(JSON.stringify({ message: "db down" }), { status: 500, headers: JSON_HEADERS }));
+  }) as typeof fetch;
+  try {
+    const body = JSON.stringify(validPayload());
+    const headers = await signHarnessRequest({
+      secret: RUNNER_SECRET,
+      direction: "runner-to-edge",
+      route: "POST /harness-callback",
+      body,
+    });
+    const res = await handler(
+      new Request("http://localhost/harness-callback", { method: "POST", headers, body }),
+    );
+    await res.body?.cancel();
+    assertEquals(res.status, 503);
+  } finally {
+    globalThis.fetch = original;
+  }
 });
 
 // ============================================================================
