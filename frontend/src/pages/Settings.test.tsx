@@ -1143,3 +1143,64 @@ describe("Settings: Reset AI Settings button", () => {
     );
   });
 });
+
+// ============================================================================
+// Agent backend (external harness)
+// ============================================================================
+
+describe("Settings: agent backend", () => {
+  it("hides the backend selector when only the provider is available", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());
+    await switchToAdvanced(user);
+    expect(screen.queryByLabelText("Backend")).not.toBeInTheDocument();
+  });
+
+  it("does not send agent_backend when the selector is hidden", async () => {
+    const user = userEvent.setup();
+    renderSettings();
+    await waitFor(() => expect(screen.getByText("Save Settings")).toBeInTheDocument());
+    await user.click(screen.getByText("Save Settings"));
+    const put = await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "PUT");
+      expect(call).toBeDefined();
+      return call!;
+    });
+    const body = JSON.parse(put[1]!.body as string);
+    expect(body).not.toHaveProperty("agent_backend");
+  });
+
+  it("shows allowlisted backends and saves the selection", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          ...mockSettings,
+          agent_backend: "provider",
+          available_agent_backends: ["provider", "opencode", "hermes"],
+        }),
+      headers: new Headers(),
+    } as Response);
+
+    renderSettings();
+    await waitFor(() => expect(screen.getByText("Settings")).toBeInTheDocument());
+    await switchToAdvanced(user);
+
+    const select = screen.getByLabelText("Backend") as HTMLSelectElement;
+    expect(select.value).toBe("provider");
+    expect(screen.getByRole("option", { name: "OpenCode (self-hosted)" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Hermes Agent (self-hosted)" })).toBeInTheDocument();
+
+    await user.selectOptions(select, "hermes");
+    await user.click(screen.getByText("Save Settings"));
+    const put = await waitFor(() => {
+      const call = vi.mocked(fetch).mock.calls.find(([, init]) => init?.method === "PUT");
+      expect(call).toBeDefined();
+      return call!;
+    });
+    expect(JSON.parse(put[1]!.body as string).agent_backend).toBe("hermes");
+  });
+});
