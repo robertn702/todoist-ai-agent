@@ -29,6 +29,7 @@ Todoist AI Agent — a multi-tenant SaaS that adds AI-powered conversations to T
 - `messages.ts` — Converts Todoist comments to AI conversation messages.
 - `todoist.ts` — Todoist REST API client (comments, tasks, projects, file downloads).
 - `rate-limit.ts` — Per-user rate limiting with account blocking via PostgreSQL function.
+- `harness.ts` / `harness-auth.ts` — Optional external harness backends (OpenCode, Hermes): signed, allowlisted Edge ↔ runner requests. See `docs/external-harness.md`.
 - `supabase.ts` — Two client factories: `createServiceClient` (admin) and `createUserClient` (RLS-scoped).
 
 ### Edge Functions
@@ -39,6 +40,7 @@ Todoist AI Agent — a multi-tenant SaaS that adds AI-powered conversations to T
 | `auth-start` | No | Initiates Todoist OAuth with HMAC-signed CSRF state |
 | `auth-callback` | No | Handles Todoist OAuth token exchange, verifies CSRF state |
 | `settings` | No* | CRUD for user preferences (validates auth header manually) |
+| `harness-callback` | No | Receives signed results from the external harness runner (`runner/`) |
 
 *Settings validates the Authorization header via Supabase user client, not Edge Function JWT verification.
 
