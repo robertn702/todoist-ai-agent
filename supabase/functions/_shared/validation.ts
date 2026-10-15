@@ -102,6 +102,13 @@ export function validateSettings(
     }
   }
 
+  if ("agent_backend" in updates) {
+    const v = updates.agent_backend;
+    if (typeof v !== "string" || !["provider", "opencode", "hermes"].includes(v)) {
+      errors.push({ field: "agent_backend", message: "Must be one of: provider, opencode, hermes" });
+    }
+  }
+
   if ("custom_prompt" in updates && updates.custom_prompt != null) {
     const v = updates.custom_prompt;
     if (typeof v !== "string" || v.length > 2000) {
