@@ -70,6 +70,7 @@ sequenceDiagram
 | **Bring your own key** | Supports Anthropic (Claude) and any OpenAI-compatible provider, with key validation before save |
 | **Image support** | Attach images to comments for multimodal AI analysis |
 | **File attachments** | Attach PDFs (Anthropic native) or text-based files (.txt, .md, .csv, .json, .py, .sh, etc.) for AI analysis |
+| **External agent harnesses** | Optional, allowlisted: run comments through a self-hosted OpenCode or Hermes Agent session per task via a signed runner bridge ([guide](docs/external-harness.md)) |
 | **Data isolation** | Row Level Security ensures complete tenant separation |
 | **Error tracking** | Optional Sentry integration for monitoring |
 | **Accessible UI** | ARIA labels, focus management, keyboard navigation, screen reader support |
@@ -246,6 +247,9 @@ Open [localhost:5173](http://localhost:5173), click **Connect Todoist**, and aut
 3. The agent responds as a new comment
 4. Continue the conversation — history is preserved per task
 
+To use a self-hosted OpenCode or Hermes Agent instead of the AI provider, see
+[External harness backends](docs/external-harness.md).
+
 ## Development
 
 ### Commands
@@ -258,6 +262,7 @@ npm run functions:serve     # Serve Edge Functions locally
 npm run frontend:dev        # Start frontend dev server
 npm run frontend:build      # Build frontend for production
 npm test                    # Run Deno test suite
+npm run test:runner         # Run external harness runner tests
 ```
 
 ### Running Tests
